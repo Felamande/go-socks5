@@ -167,3 +167,85 @@ func (s *Server) ServeConn(conn net.Conn) error {
 
 	return nil
 }
+
+// ListenAndServe is used to create a listener and serve on it
+func (s *Server) ListenAndServeWithErrorChan(network, addr string, errCh chan error) {
+	l, err := net.Listen(network, addr)
+	if err != nil {
+		go func() { errCh <- err }()
+		return
+	}
+	s.ServeWithErrorChan(l, errCh)
+	return
+}
+
+// Serve is used to serve connections from a listener
+func (s *Server) ServeWithErrorChan(l net.Listener, errCh chan error) {
+	for {
+		conn, err := l.Accept()
+		if err != nil {
+			go func() { errCh <- err }()
+
+			return
+		}
+		go s.ServeConnWithErrorChan(conn, errCh)
+	}
+}
+
+// ServeConn is used to serve a single connection.
+func (s *Server) ServeConnWithErrorChan(conn net.Conn, errCh chan error) {
+	defer conn.Close()
+	bufConn := bufio.NewReader(conn)
+
+	// Read the version byte
+	version := []byte{0}
+	if _, err := bufConn.Read(version); err != nil {
+		go func() { errCh <- fmt.Errorf("[ERR] socks: Failed to get version byte: %v", err) }()
+		s.config.Logger.Printf("[ERR] socks: Failed to get version byte: %v", err)
+		return
+	}
+
+	// Ensure we are compatible
+	if version[0] != socks5Version {
+		err := fmt.Errorf("Unsupported SOCKS version: %v", version)
+		go func() { errCh <- fmt.Errorf("[ERR] socks: %v", err) }()
+		s.config.Logger.Printf("[ERR] socks: %v", err)
+		return
+	}
+
+	// Authenticate the connection
+	authContext, err := s.authenticate(conn, bufConn)
+	if err != nil {
+		err = fmt.Errorf("Failed to authenticate: %v", err)
+		go func() { errCh <- fmt.Errorf("[ERR] socks: %v", err) }()
+
+		s.config.Logger.Printf("[ERR] socks: %v", err)
+		return
+	}
+
+	request, err := NewRequest(bufConn)
+	if err != nil {
+		if err == unrecognizedAddrType {
+			if err := sendReply(conn, addrTypeNotSupported, nil); err != nil {
+				go func() { errCh <- fmt.Errorf("Failed to send reply: %v", err) }()
+				return
+			}
+		}
+		go func() { errCh <- fmt.Errorf("Failed to read destination address: %v", err) }()
+		return
+	}
+	request.AuthContext = authContext
+	if client, ok := conn.RemoteAddr().(*net.TCPAddr); ok {
+		request.RemoteAddr = &AddrSpec{IP: client.IP, Port: client.Port}
+	}
+
+	// Process the client request
+	if err := s.handleRequest(request, conn); err != nil {
+		err = fmt.Errorf("Failed to handle request: %v", err)
+		go func() { errCh <- fmt.Errorf("[ERR] socks: %v", err) }()
+		s.config.Logger.Printf("[ERR] socks: %v", err)
+		return
+	}
+
+	return
+}
