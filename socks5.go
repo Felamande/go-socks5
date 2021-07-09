@@ -188,12 +188,6 @@ func (s *Server) ListenAndServeWithCtx(network, addr string, ctx context.Context
 func (s *Server) ServeWithCtx(l net.Listener, ctx context.Context) error {
 
 	for {
-		conn, err := l.Accept()
-		if err != nil {
-			return err
-		}
-
-		go s.ServeConnWithCtx(conn, ctx)
 		select {
 		case <-ctx.Done():
 			l.Close()
@@ -201,6 +195,13 @@ func (s *Server) ServeWithCtx(l net.Listener, ctx context.Context) error {
 		default:
 		}
 	}
+	conn, err := l.Accept()
+	if err != nil {
+		return err
+	}
+
+	go s.ServeConnWithCtx(conn, ctx)
+
 }
 
 // ServeConn is used to serve a single connection.
