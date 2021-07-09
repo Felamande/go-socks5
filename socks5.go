@@ -194,14 +194,14 @@ func (s *Server) ServeWithCtx(l net.Listener, ctx context.Context) error {
 			return fmt.Errorf("cancelled by user")
 		default:
 		}
-	}
-	conn, err := l.Accept()
-	if err != nil {
-		return err
-	}
+		conn, err := l.Accept()
+		if err != nil {
+			return err
+		}
 
-	go s.ServeConnWithCtx(conn, ctx)
+		go s.ServeConnWithCtx(conn, ctx)
 
+	}
 }
 
 // ServeConn is used to serve a single connection.
