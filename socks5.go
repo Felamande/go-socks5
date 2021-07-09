@@ -48,6 +48,8 @@ type Config struct {
 
 	// Optional function for dialing out
 	Dial func(ctx context.Context, network, addr string) (net.Conn, error)
+
+	LogChan chan error
 }
 
 // Server is reponsible for accepting connections and handling
@@ -81,6 +83,10 @@ func New(conf *Config) (*Server, error) {
 	// Ensure we have a log target
 	if conf.Logger == nil {
 		conf.Logger = log.New(os.Stdout, "", log.LstdFlags)
+	}
+
+	if conf.LogChan == nil {
+		conf.LogChan = make(chan error, 10)
 	}
 
 	server := &Server{
@@ -169,35 +175,43 @@ func (s *Server) ServeConn(conn net.Conn) error {
 }
 
 // ListenAndServe is used to create a listener and serve on it
-func (s *Server) ListenAndServeWithErrorChan(network, addr string, errCh chan error) error {
+func (s *Server) ListenAndServeWithCtx(network, addr string, ctx context.Context) error {
 	l, err := net.Listen(network, addr)
 	if err != nil {
 		return err
 	}
-	return s.ServeWithErrorChan(l, errCh)
+	return s.ServeWithCtx(l, ctx)
 
 }
 
 // Serve is used to serve connections from a listener
-func (s *Server) ServeWithErrorChan(l net.Listener, errCh chan error) error {
+func (s *Server) ServeWithCtx(l net.Listener, ctx context.Context) error {
+
 	for {
 		conn, err := l.Accept()
 		if err != nil {
 			return err
 		}
-		go s.ServeConnWithErrorChan(conn, errCh)
+
+		go s.ServeConnWithCtx(conn, ctx)
+		select {
+		case <-ctx.Done():
+			l.Close()
+			return fmt.Errorf("cancelled by user")
+		default:
+		}
 	}
 }
 
 // ServeConn is used to serve a single connection.
-func (s *Server) ServeConnWithErrorChan(conn net.Conn, errCh chan error) {
+func (s *Server) ServeConnWithCtx(conn net.Conn, ctx context.Context) {
 	defer conn.Close()
 	bufConn := bufio.NewReader(conn)
 
 	// Read the version byte
 	version := []byte{0}
 	if _, err := bufConn.Read(version); err != nil {
-		go func() { errCh <- fmt.Errorf("[ERR] socks: Failed to get version byte: %v", err) }()
+		go func() { s.config.LogChan <- fmt.Errorf("[ERR] socks: Failed to get version byte: %v", err) }()
 		s.config.Logger.Printf("[ERR] socks: Failed to get version byte: %v", err)
 		return
 	}
@@ -205,7 +219,7 @@ func (s *Server) ServeConnWithErrorChan(conn net.Conn, errCh chan error) {
 	// Ensure we are compatible
 	if version[0] != socks5Version {
 		err := fmt.Errorf("Unsupported SOCKS version: %v", version)
-		go func() { errCh <- fmt.Errorf("[ERR] socks: %v", err) }()
+		go func() { s.config.LogChan <- fmt.Errorf("[ERR] socks: %v", err) }()
 		s.config.Logger.Printf("[ERR] socks: %v", err)
 		return
 	}
@@ -214,7 +228,7 @@ func (s *Server) ServeConnWithErrorChan(conn net.Conn, errCh chan error) {
 	authContext, err := s.authenticate(conn, bufConn)
 	if err != nil {
 		err = fmt.Errorf("Failed to authenticate: %v", err)
-		go func() { errCh <- fmt.Errorf("[ERR] socks: %v", err) }()
+		go func() { s.config.LogChan <- fmt.Errorf("[ERR] socks: %v", err) }()
 
 		s.config.Logger.Printf("[ERR] socks: %v", err)
 		return
@@ -224,11 +238,11 @@ func (s *Server) ServeConnWithErrorChan(conn net.Conn, errCh chan error) {
 	if err != nil {
 		if err == unrecognizedAddrType {
 			if err := sendReply(conn, addrTypeNotSupported, nil); err != nil {
-				go func() { errCh <- fmt.Errorf("Failed to send reply: %v", err) }()
+				go func() { s.config.LogChan <- fmt.Errorf("Failed to send reply: %v", err) }()
 				return
 			}
 		}
-		go func() { errCh <- fmt.Errorf("Failed to read destination address: %v", err) }()
+		go func() { s.config.LogChan <- fmt.Errorf("Failed to read destination address: %v", err) }()
 		return
 	}
 	request.AuthContext = authContext
@@ -239,7 +253,7 @@ func (s *Server) ServeConnWithErrorChan(conn net.Conn, errCh chan error) {
 	// Process the client request
 	if err := s.handleRequest(request, conn); err != nil {
 		err = fmt.Errorf("Failed to handle request: %v", err)
-		go func() { errCh <- fmt.Errorf("[ERR] socks: %v", err) }()
+		go func() { s.config.LogChan <- fmt.Errorf("[ERR] socks: %v", err) }()
 		s.config.Logger.Printf("[ERR] socks: %v", err)
 		return
 	}
