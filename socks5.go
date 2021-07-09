@@ -169,24 +169,21 @@ func (s *Server) ServeConn(conn net.Conn) error {
 }
 
 // ListenAndServe is used to create a listener and serve on it
-func (s *Server) ListenAndServeWithErrorChan(network, addr string, errCh chan error) {
+func (s *Server) ListenAndServeWithErrorChan(network, addr string, errCh chan error) error {
 	l, err := net.Listen(network, addr)
 	if err != nil {
-		go func() { errCh <- err }()
-		return
+		return err
 	}
-	s.ServeWithErrorChan(l, errCh)
-	return
+	return s.ServeWithErrorChan(l, errCh)
+
 }
 
 // Serve is used to serve connections from a listener
-func (s *Server) ServeWithErrorChan(l net.Listener, errCh chan error) {
+func (s *Server) ServeWithErrorChan(l net.Listener, errCh chan error) error {
 	for {
 		conn, err := l.Accept()
 		if err != nil {
-			go func() { errCh <- err }()
-
-			return
+			return err
 		}
 		go s.ServeConnWithErrorChan(conn, errCh)
 	}
