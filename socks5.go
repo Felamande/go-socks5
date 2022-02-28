@@ -176,30 +176,27 @@ func (s *Server) ServeConn(conn net.Conn) error {
 
 // ListenAndServe is used to create a listener and serve on it
 func (s *Server) ListenAndServeWithCtx(network, addr string, ctx context.Context) error {
-	l, err := net.Listen(network, addr)
+	l, err := NewChanlisten(ctx, network, addr)
 	if err != nil {
-		return err
+		return ListenError{err}
 	}
 	return s.ServeWithCtx(l, ctx)
 
 }
 
 // Serve is used to serve connections from a listener
-func (s *Server) ServeWithCtx(l net.Listener, ctx context.Context) error {
-
+func (s *Server) ServeWithCtx(l *chanListener, ctx context.Context) error {
+	cchan, echan := l.Accept()
 	for {
 		select {
 		case <-ctx.Done():
 			l.Close()
-			return fmt.Errorf("cancelled by user")
-		default:
-		}
-		conn, err := l.Accept()
-		if err != nil {
-			return err
-		}
+			return fmt.Errorf("canceled by user")
+		case conn := <-cchan:
+			go s.ServeConnWithCtx(conn, ctx)
+		case <-echan:
 
-		go s.ServeConnWithCtx(conn, ctx)
+		}
 
 	}
 }
