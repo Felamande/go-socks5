@@ -187,15 +187,17 @@ func (s *Server) ListenAndServeWithCtx(network, addr string, ctx context.Context
 // Serve is used to serve connections from a listener
 func (s *Server) ServeWithCtx(l *chanListener, ctx context.Context) error {
 	cchan, echan := l.Accept()
+
 	for {
 		select {
 		case <-ctx.Done():
-			l.Close()
-			return fmt.Errorf("canceled by user")
+			err := l.Close()
+			return err
 		case conn := <-cchan:
+			s.config.LogChan <- fmt.Errorf("start serving conn from %v", conn.RemoteAddr())
 			go s.ServeConnWithCtx(conn, ctx)
-		case <-echan:
-
+		case e := <-echan:
+			s.config.LogChan <- e
 		}
 
 	}
@@ -249,6 +251,10 @@ func (s *Server) ServeConnWithCtx(conn net.Conn, ctx context.Context) {
 	}
 
 	// Process the client request
+	go func() {
+		s.config.LogChan <- fmt.Errorf("start handling socks from %v to dst: %v", request.RemoteAddr, request.DestAddr)
+	}()
+
 	if err := s.handleRequest(request, conn); err != nil {
 		err = fmt.Errorf("Failed to handle request: %v", err)
 		go func() { s.config.LogChan <- fmt.Errorf("[ERR] socks: %v", err) }()
