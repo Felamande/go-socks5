@@ -42,3 +42,15 @@ func (l *chanListener) Accept() (chan net.Conn, chan error) {
 func (l *chanListener) Close() error {
 	return l.l.Close()
 }
+
+func (l *chanListener) Port() int {
+	Iaddr := l.l.Addr()
+	switch addr := Iaddr.(type) {
+	case *net.TCPAddr:
+		return addr.Port
+	case *net.UDPAddr:
+		return addr.Port
+	default:
+		return 0
+	}
+}
